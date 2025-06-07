@@ -1,4 +1,5 @@
-﻿using HarmonyLib;
+﻿using DynamicMusic;
+using HarmonyLib;
 using System.Reflection;
 using UnityEngine;
 
@@ -13,7 +14,7 @@ namespace DaylightFix
     }
 
     [HarmonyPatch(typeof(World))]
-    internal class HarmonyPatches_DuskDawnInit
+    internal class World_Patches
     {
         [HarmonyPostfix]
         [HarmonyPatch(nameof(World.DuskDawnInit))]
@@ -27,8 +28,44 @@ namespace DaylightFix
         }
     }
 
+    [HarmonyPatch(typeof(GameUtils))]
+    internal class GameUtils_Patches
+    {
+        [HarmonyPostfix]
+        [HarmonyPatch(nameof(GameUtils.CalcDuskDawnHours))]
+        static void Postfix_CalcDuskDawnHours(ref (int duskHour, int dawnHour) __result)
+        {
+            int noon = 12;
+            int mod = GameStats.GetInt(EnumGameStats.DayLightLength) / 2;
+            __result.dawnHour = Mathf.Clamp(noon - mod, 0, 23);
+            __result.duskHour = Mathf.Clamp(noon + mod, 0, 23);
+        }
+    }
+
+    [HarmonyPatch(typeof(DayTimeTracker))]
+    internal class DayTimeTracker_Patches
+    {
+        [HarmonyPostfix]
+        [HarmonyPatch(nameof(DayTimeTracker.SetDawnTime))]
+        static void Postfix_SetDawnTime(ref DayTimeTracker __instance)
+        {
+            int dayLightLength = GamePrefs.GetInt(EnumGamePrefs.DayLightLength);
+            float halfDayLight = dayLightLength / 2.0f;
+            __instance.dawnTime = (12f - halfDayLight) * 60f;
+        }
+
+        [HarmonyPostfix]
+        [HarmonyPatch(nameof(DayTimeTracker.SetDuskTime))]
+        static void Postfix_SetDuskTime(ref DayTimeTracker __instance)
+        {
+            int dayLightLength = GamePrefs.GetInt(EnumGamePrefs.DayLightLength);
+            float halfDayLight = dayLightLength / 2.0f;
+            __instance.duskTime = (12f + halfDayLight) * 60f;
+        }
+    }
+
     [HarmonyPatch(typeof(SkyManager))]
-    internal class HarmonyPatches_Sky
+    internal class SkyManager_Patches
     {
         [HarmonyPrefix]
         [HarmonyPatch(nameof(SkyManager.UpdateSunMoonAngles))]
@@ -127,6 +164,52 @@ namespace DaylightFix
                 return false;
             SkyManager.cloudsSphereMtrl.SetVector("_SunDir", (Vector4)SkyManager.sunDirV);
             SkyManager.cloudsSphereMtrl.SetVector("_SunMoonDir", (Vector4)SkyManager.sunMoonDirV);
+            return false;
+        }
+
+        [HarmonyPrefix]
+        [HarmonyPatch(nameof(SkyManager.IsBloodMoonVisible))]
+        static bool Prefix_IsBloodMoonVisible(ref bool __result)
+        {
+            int dc = (int)SkyManager.dayCount;
+            int bm = GameStats.GetInt(EnumGameStats.BloodMoonDay);
+            float tod = SkyManager.TimeOfDay();
+            float dawn = SkyManager.dawnTime;
+            float dusk = SkyManager.duskTime;
+            const float preRamp = 4f;
+            const float postExtend = 2f;
+
+            __result = (dc == bm && tod >= dusk - preRamp) || (dc == bm + 1 && tod <= dawn + postExtend);
+            return false;
+        }
+
+        [HarmonyPrefix]
+        [HarmonyPatch(nameof(SkyManager.BloodMoonVisiblePercent))]
+        static bool Prefix_BloodMoonVisiblePercent(ref float __result)
+        {
+            int dc = (int)SkyManager.dayCount;
+            int bm = GameStats.GetInt(EnumGameStats.BloodMoonDay);
+            float tod = SkyManager.TimeOfDay();
+            float dawn = SkyManager.dawnTime;
+            float dusk = SkyManager.duskTime;
+
+            const float rampDuration = 4f; // fade-in length
+            const float postExtend = 2f; // hours after dawn to stay fully visible (vanilla defaults to dusk-4 to dawn+2)
+
+            if (dc == bm)
+            {
+                float start = dusk - rampDuration;
+                if (tod < start) { __result = 0f; return false; }
+                if (tod < dusk) { __result = (tod - start) / rampDuration; return false; }
+                __result = 1f; return false;
+            }
+
+            if (dc == bm + 1 && tod <= dawn + postExtend)
+            {
+                __result = 1f; return false;
+            }
+
+            __result = 0f;
             return false;
         }
     }
